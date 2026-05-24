@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, User, Phone, Mail, Stethoscope, Clock, CheckCircle2, ChevronRight, ChevronLeft, Trash2, CalendarDays, X } from 'lucide-react';
+import { supabase } from '../supabaseClient.js';
 
 const departmentDoctors = {
   Cardiology: ['Dr. Sarah Jenkins'],
@@ -98,30 +99,48 @@ export default function BookingSystem({ selectedDoctor, clearSelectedDoctor }) {
     setMessage({ text: '', type: '' });
 
     try {
-      const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-                      ? 'http://localhost:3000' 
-                      : '';
-      const response = await fetch(`${baseUrl}/api/appointments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData)
-      });
-      
-      const result = await response.json();
-      
-      if (response.ok && result.success) {
-        setMessage({ text: result.message, type: 'success' });
-        
+      if (supabase) {
+        // Insert directly into Supabase 'appointments' table
+        const payload = {
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          department: formData.department,
+          doctor: formData.doctor,
+          date: formData.date,
+          time_slot: formData.timeSlot,
+          status: 'Pending',
+        };
+
+        const { data, error } = await supabase
+          .from('appointments')
+          .insert([payload])
+          .select();
+
+        if (error) throw error;
+
+        const dbRecord = data?.[0] || {};
+        setMessage({ 
+          text: `Thank you ${formData.name}! Your appointment for ${formData.department} on ${formData.date} has been confirmed.`, 
+          type: 'success' 
+        });
+
         // Save to LocalStorage for dashboard
         const currentBookings = JSON.parse(localStorage.getItem('my_bookings') || '[]');
         const newBooking = {
-          ...result.appointment,
+          id: dbRecord.id || Date.now(),
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          department: formData.department,
+          doctor: formData.doctor,
+          date: formData.date,
           timeSlot: formData.timeSlot,
+          status: dbRecord.status || 'Pending',
+          createdAt: dbRecord.created_at || new Date().toISOString(),
         };
         localStorage.setItem('my_bookings', JSON.stringify([newBooking, ...currentBookings]));
-        
+
         // Reset Form
         setFormData({
           name: '',
@@ -135,10 +154,49 @@ export default function BookingSystem({ selectedDoctor, clearSelectedDoctor }) {
         clearSelectedDoctor();
         setStep(4); // Success step
       } else {
-        setMessage({ text: result.message || 'Failed to submit appointment.', type: 'error' });
+        // Fallback: Express Backend serving locally
+        const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+                        ? 'http://localhost:3000' 
+                        : '';
+        const response = await fetch(`${baseUrl}/api/appointments`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(formData)
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.success) {
+          setMessage({ text: result.message, type: 'success' });
+          
+          // Save to LocalStorage for dashboard
+          const currentBookings = JSON.parse(localStorage.getItem('my_bookings') || '[]');
+          const newBooking = {
+            ...result.appointment,
+            timeSlot: formData.timeSlot,
+          };
+          localStorage.setItem('my_bookings', JSON.stringify([newBooking, ...currentBookings]));
+          
+          // Reset Form
+          setFormData({
+            name: '',
+            email: '',
+            phone: '',
+            department: '',
+            doctor: '',
+            date: '',
+            timeSlot: '',
+          });
+          clearSelectedDoctor();
+          setStep(4); // Success step
+        } else {
+          setMessage({ text: result.message || 'Failed to submit appointment.', type: 'error' });
+        }
       }
     } catch (err) {
-      setMessage({ text: 'Failed to connect to the server. Running locally?', type: 'error' });
+      setMessage({ text: 'Failed to submit appointment. Database or Server error occurred.', type: 'error' });
       console.error(err);
     } finally {
       setLoading(false);
